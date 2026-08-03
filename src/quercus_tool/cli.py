@@ -58,6 +58,19 @@ def _course_title(course: dict[str, Any]) -> str:
     return str(name or code or course.get("id") or "Course")
 
 
+def _discovery(rows: Any) -> dict[str, Any]:
+    value = getattr(rows, "discovery", None)
+    return value if isinstance(value, dict) else {"source": "collection", "complete": True}
+
+
+def _print_discovery(value: dict[str, Any]) -> None:
+    if value.get("complete"):
+        print(f"Discovery: {value.get('source') or 'collection'} (complete)")
+    else:
+        reason = f" — {value['reason']}" if value.get("reason") else ""
+        print(f"Discovery: {value.get('source') or 'unknown'} (incomplete{reason})")
+
+
 def command_login(args: argparse.Namespace) -> None:
     if args.persistent:
         if args.tab is not None:
@@ -235,11 +248,13 @@ def command_files(args: argparse.Namespace) -> None:
         since=parse_duration(args.since) if args.since else None,
         search=args.search,
     )
-    result = {"course": course, "files": rows}
+    discovery = _discovery(rows)
+    result = {"course": course, "files": rows, "discovery": discovery}
     if args.json:
         emit_json(result)
         return
     print(_course_title(course))
+    _print_discovery(discovery)
     if not rows:
         print("No files found.")
         return
@@ -266,11 +281,13 @@ def command_download(args: argparse.Namespace) -> None:
 def command_pages(args: argparse.Namespace) -> None:
     course, quercus = course_context(args.course)
     rows = quercus.pages(int(course["id"]), limit=args.limit, search=args.search)
-    result = {"course": course, "pages": rows}
+    discovery = _discovery(rows)
+    result = {"course": course, "pages": rows, "discovery": discovery}
     if args.json:
         emit_json(result)
         return
     print(_course_title(course))
+    _print_discovery(discovery)
     if not rows:
         print("No pages found.")
         return

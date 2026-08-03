@@ -252,7 +252,9 @@ class CanvasClient:
             if response.status_code >= 400:
                 detail = self._error_detail(data)
                 raise NetworkError(
-                    f"Quercus returned HTTP {response.status_code}" + (f": {detail}" if detail else "")
+                    f"Quercus returned HTTP {response.status_code}" + (f": {detail}" if detail else ""),
+                    status_code=response.status_code,
+                    response_detail=detail,
                 )
             return response, data
         raise NetworkError("Quercus request exhausted its retry budget")
@@ -287,16 +289,19 @@ class CanvasClient:
         *,
         params: list[tuple[str, Any]] | dict[str, Any] | None = None,
         limit: int,
+        max_pages: int = MAX_PAGES,
     ) -> list[dict[str, Any]]:
         if not 1 <= limit <= MAX_ITEMS:
             raise NetworkError(f"item limit must be between 1 and {MAX_ITEMS}")
+        if not 1 <= max_pages <= MAX_PAGES:
+            raise NetworkError(f"page limit must be between 1 and {MAX_PAGES}")
         rows: list[dict[str, Any]] = []
         next_url: str | None = url
         next_params = params
         pages = 0
         while next_url and len(rows) < limit:
             pages += 1
-            if pages > MAX_PAGES:
+            if pages > max_pages:
                 raise NetworkError("Quercus pagination exceeded the safety limit")
             response, data = self._request_api(next_url, params=next_params)
             next_params = None

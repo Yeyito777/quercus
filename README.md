@@ -34,7 +34,9 @@ The saved browser profile and cookies nevertheless have the broader capabilities
 - Announcement bodies and safe local link extraction.
 - Assignment deadlines and only the current user's submission state.
 - Module/item inspection with bounded fallback pagination.
-- File/page discovery and explicit page-body retrieval.
+- File/page discovery and explicit page-body retrieval. If an otherwise accessible course disables
+  one of those collections, the corresponding list command can fall back to bounded, visible module
+  links and explicitly marks that result incomplete; it never claims to enumerate unlinked objects.
 - Current user's posted aggregate and per-assignment grade state; unposted grade fields are discarded.
 - Safe, bounded, private downloads of explicitly selected files.
 - Stable JSON output and stable exit-code classes.
@@ -123,6 +125,12 @@ Examples:
 ```
 
 `--since` accepts a positive integer followed by `m`, `h`, `d`, or `w`.
+
+`files` and `pages` report a discovery source and completeness. Normal Canvas collection results are
+`collection (complete)`. For the narrowly recognized Canvas responses indicating that a course has
+disabled a collection, they inspect only explicit `File` or `Page` references in visible modules and
+report `modules (incomplete)` with a reason. Module fallback is bounded and cannot discover unlinked
+or orphaned course objects.
 
 ## Privacy and data minimization
 

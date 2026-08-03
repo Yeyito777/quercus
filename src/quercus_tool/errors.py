@@ -25,6 +25,18 @@ class SessionRejectedError(QuercusError):
 class NetworkError(QuercusError):
     exit_code = 5
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: dict | None = None,
+        status_code: int | None = None,
+        response_detail: str = "",
+    ):
+        super().__init__(message, details=details)
+        self.status_code = status_code
+        self.response_detail = response_detail
+
 
 class UnsafeFileError(QuercusError):
     exit_code = 6

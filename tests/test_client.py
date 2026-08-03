@@ -52,6 +52,13 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SessionRejectedError):
             CanvasClient(session(), transport=transport).profile()
 
+    def test_http_error_retains_status_and_structured_detail_for_precise_handling(self):
+        transport = FakeTransport([FakeResponse(403, {"message": "user not authorized to perform that action"})])
+        with self.assertRaises(NetworkError) as caught:
+            CanvasClient(session(), transport=transport).collect("/api/v1/courses/1/files", limit=1)
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertEqual(caught.exception.response_detail, "user not authorized to perform that action")
+
     def test_retry_is_bounded_and_honors_capped_delay(self):
         delays = []
         transport = FakeTransport([

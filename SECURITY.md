@@ -17,6 +17,7 @@
 - The CLI exposes only inspection and explicit download commands.
 - Direct Canvas calls use only HTTP `GET`.
 - API paths are matched against a closed route allowlist. There is no generic URL, API, GraphQL, JavaScript, request-replay, or method escape hatch.
+- Disabled file/page collection fallback follows only explicit object references returned through bounded visible-module reads. It never guesses IDs or slugs, and its output is marked incomplete because unlinked objects cannot be enumerated this way.
 - POST, PUT, PATCH, DELETE, assignment submission, quiz participation, discussions, invitation acceptance, module completion, enrollment changes, and grade mutation are absent.
 - The current user's course enrollment, assignment submission, and grade projections are used. The grade output allowlists posted/current fields and never forwards `unposted_*` grade fields.
 

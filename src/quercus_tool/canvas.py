@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +17,32 @@ CANVAS_ENROLLMENT_STATES = {
     "completed": "completed",
     "pending": "invited_or_pending",
 }
+
+MODULE_DISCOVERY_MAX_MODULES = 100
+MODULE_DISCOVERY_MAX_ITEMS = 500
+MODULE_DISCOVERY_MAX_ITEM_COLLECTIONS = 8
+MODULE_DISCOVERY_MAX_METADATA_REQUESTS = 32
+MODULE_DISCOVERY_COLLECTION_PAGES = 1
+
+_DISABLED_COLLECTION_ERRORS = {
+    "files": (403, "user not authorized to perform that action"),
+    "pages": (404, "that page has been disabled for this course"),
+}
+
+
+class DiscoveryList(list[dict[str, Any]]):
+    def __init__(
+        self,
+        values: Iterable[dict[str, Any]] = (),
+        *,
+        source: str = "collection",
+        complete: bool = True,
+        reason: str | None = None,
+    ):
+        super().__init__(values)
+        self.discovery = {"source": source, "complete": complete}
+        if reason:
+            self.discovery["reason"] = reason
 
 
 def parse_duration(value: str, *, now: datetime | None = None) -> datetime:
@@ -337,12 +364,17 @@ class Quercus:
         limit: int,
         since: datetime | None = None,
         search: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> DiscoveryList:
         params: list[tuple[str, Any]] = [("sort", "updated_at"), ("order", "desc"), ("per_page", 100)]
         if search:
             params.append(("search_term", search))
         candidate_limit = 100 if since else limit
-        rows = self.client.collect(f"/api/v1/courses/{course_id}/files", params=params, limit=candidate_limit)
+        try:
+            rows = self.client.collect(f"/api/v1/courses/{course_id}/files", params=params, limit=candidate_limit)
+        except NetworkError as error:
+            if not self._collection_disabled(error, "files"):
+                raise
+            return self._files_from_modules(course_id, limit=limit, since=since, search=search)
         result = []
         for row in rows:
             timestamp = parse_time(row.get("updated_at"))
@@ -351,7 +383,7 @@ class Quercus:
             result.append(self.project_file(row))
             if len(result) >= limit:
                 break
-        return result
+        return DiscoveryList(result)
 
     @staticmethod
     def project_file(row: dict[str, Any]) -> dict[str, Any]:
@@ -371,18 +403,119 @@ class Quercus:
             "lockExplanation": row.get("lock_explanation"),
         }
 
-    def file(self, course_id: int, file_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
-        value = self.client.get_json(f"/api/v1/courses/{course_id}/files/{file_id}")
-        if not isinstance(value, dict) or value.get("id") != file_id:
-            raise NetworkError("Quercus returned invalid metadata for the selected file")
-        return self.project_file(value), value
+    @staticmethod
+    def _collection_disabled(error: NetworkError, kind: str) -> bool:
+        status, detail = _DISABLED_COLLECTION_ERRORS[kind]
+        normalized = " ".join(error.response_detail.casefold().split()).rstrip(".")
+        return error.status_code == status and normalized == detail
 
-    def pages(self, course_id: int, *, limit: int, search: str | None = None) -> list[dict[str, Any]]:
-        params: list[tuple[str, Any]] = [("sort", "updated_at"), ("order", "desc"), ("per_page", 100)]
-        if search:
-            params.append(("search_term", search))
-        rows = self.client.collect(f"/api/v1/courses/{course_id}/pages", params=params, limit=limit)
-        return [{
+    def _visible_module_items(self, course_id: int) -> list[dict[str, Any]]:
+        """Return a bounded, stable sequence of item references Canvas exposed in modules."""
+        modules = self.client.collect(
+            f"/api/v1/courses/{course_id}/modules",
+            params=[("include[]", "items"), ("include[]", "content_details"), ("per_page", 100)],
+            limit=MODULE_DISCOVERY_MAX_MODULES,
+            max_pages=MODULE_DISCOVERY_COLLECTION_PAGES,
+        )
+        result: list[dict[str, Any]] = []
+        item_collections = 0
+        for module in modules:
+            raw_items = module.get("items") if isinstance(module.get("items"), list) else []
+            count = module.get("items_count")
+            is_truncated = isinstance(count, int) and count > len(raw_items)
+            if (not raw_items or is_truncated) and item_collections < MODULE_DISCOVERY_MAX_ITEM_COLLECTIONS:
+                module_id = module.get("id")
+                if isinstance(module_id, int) and module_id > 0:
+                    remaining = MODULE_DISCOVERY_MAX_ITEMS - len(result)
+                    if remaining <= 0:
+                        break
+                    requested = min(count if isinstance(count, int) and count > 0 else 100, remaining)
+                    raw_items = self.client.collect(
+                        f"/api/v1/courses/{course_id}/modules/{module_id}/items",
+                        params=[("include[]", "content_details"), ("per_page", 100)],
+                        limit=max(1, requested),
+                        max_pages=MODULE_DISCOVERY_COLLECTION_PAGES,
+                    )
+                    item_collections += 1
+            for item in raw_items:
+                if isinstance(item, dict):
+                    result.append(item)
+                    if len(result) >= MODULE_DISCOVERY_MAX_ITEMS:
+                        return result
+        return result
+
+    @staticmethod
+    def _ordered_module_refs(
+        items: list[dict[str, Any]],
+        kind: str,
+    ) -> list[tuple[Any, str]]:
+        refs: list[tuple[Any, str]] = []
+        seen: set[Any] = set()
+        for item in items:
+            if str(item.get("type") or "").casefold() != kind.casefold():
+                continue
+            reference: Any
+            if kind == "File":
+                reference = item.get("content_id")
+                if not isinstance(reference, int) or reference <= 0:
+                    continue
+            else:
+                reference = item.get("page_url")
+                if not isinstance(reference, str) or not reference or len(reference) > 500:
+                    continue
+            if reference in seen:
+                continue
+            seen.add(reference)
+            refs.append((reference, str(item.get("title") or "")))
+        return refs
+
+    @staticmethod
+    def _search_priority(refs: list[tuple[Any, str]], search: str | None) -> list[tuple[int, Any, str]]:
+        indexed = [(index, reference, title) for index, (reference, title) in enumerate(refs)]
+        if not search:
+            return indexed
+        needle = search.casefold()
+        return sorted(indexed, key=lambda value: (needle not in value[2].casefold(), value[0]))
+
+    def _files_from_modules(
+        self,
+        course_id: int,
+        *,
+        limit: int,
+        since: datetime | None,
+        search: str | None,
+    ) -> DiscoveryList:
+        refs = self._ordered_module_refs(self._visible_module_items(course_id), "File")
+        found: list[tuple[int, dict[str, Any]]] = []
+        metadata_requests = 0
+        needle = search.casefold() if search else None
+        for index, file_id, _ in self._search_priority(refs, search):
+            if metadata_requests >= MODULE_DISCOVERY_MAX_METADATA_REQUESTS:
+                break
+            value = self.client.get_json(f"/api/v1/courses/{course_id}/files/{file_id}")
+            metadata_requests += 1
+            if not isinstance(value, dict) or value.get("id") != file_id:
+                raise NetworkError("Quercus returned invalid metadata for a module-linked file")
+            projected = self.project_file(value)
+            if needle and needle not in str(projected.get("name") or "").casefold():
+                continue
+            timestamp = parse_time(projected.get("updatedAt"))
+            if since and (timestamp is None or timestamp < since):
+                continue
+            found.append((index, projected))
+            if len(found) >= limit:
+                break
+        found.sort(key=lambda value: value[0])
+        return DiscoveryList(
+            (value for _, value in found),
+            source="modules",
+            complete=False,
+            reason="course files collection is disabled; only files explicitly linked from visible modules were discovered",
+        )
+
+    @staticmethod
+    def _project_page(row: dict[str, Any]) -> dict[str, Any]:
+        return {
             "id": row.get("page_id"),
             "url": row.get("url"),
             "title": row.get("title"),
@@ -391,7 +524,53 @@ class Quercus:
             "published": row.get("published"),
             "frontPage": bool(row.get("front_page")),
             "htmlUrl": row.get("html_url"),
-        } for row in rows]
+        }
+
+    def _pages_from_modules(self, course_id: int, *, limit: int, search: str | None) -> DiscoveryList:
+        refs = self._ordered_module_refs(self._visible_module_items(course_id), "Page")
+        found: list[tuple[int, dict[str, Any]]] = []
+        metadata_requests = 0
+        needle = search.casefold() if search else None
+        for index, page_url, _ in self._search_priority(refs, search):
+            if metadata_requests >= MODULE_DISCOVERY_MAX_METADATA_REQUESTS:
+                break
+            value = self.client.get_json(
+                f"/api/v1/courses/{course_id}/pages/{quote(page_url, safe='')}",
+            )
+            metadata_requests += 1
+            if not isinstance(value, dict):
+                raise NetworkError("Quercus returned invalid metadata for a module-linked page")
+            projected = self._project_page(value)
+            if needle and needle not in str(projected.get("title") or "").casefold():
+                continue
+            found.append((index, projected))
+            if len(found) >= limit:
+                break
+        found.sort(key=lambda value: value[0])
+        return DiscoveryList(
+            (value for _, value in found),
+            source="modules",
+            complete=False,
+            reason="course pages collection is disabled; only pages explicitly linked from visible modules were discovered",
+        )
+
+    def file(self, course_id: int, file_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
+        value = self.client.get_json(f"/api/v1/courses/{course_id}/files/{file_id}")
+        if not isinstance(value, dict) or value.get("id") != file_id:
+            raise NetworkError("Quercus returned invalid metadata for the selected file")
+        return self.project_file(value), value
+
+    def pages(self, course_id: int, *, limit: int, search: str | None = None) -> DiscoveryList:
+        params: list[tuple[str, Any]] = [("sort", "updated_at"), ("order", "desc"), ("per_page", 100)]
+        if search:
+            params.append(("search_term", search))
+        try:
+            rows = self.client.collect(f"/api/v1/courses/{course_id}/pages", params=params, limit=limit)
+        except NetworkError as error:
+            if not self._collection_disabled(error, "pages"):
+                raise
+            return self._pages_from_modules(course_id, limit=limit, search=search)
+        return DiscoveryList(self._project_page(row) for row in rows)
 
     def page(self, course_id: int, reference: str) -> dict[str, Any]:
         reference = str(reference).strip()
