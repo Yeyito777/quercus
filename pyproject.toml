@@ -1,0 +1,30 @@
+[project]
+name = "quercus-helper"
+version = "0.1.0"
+description = "Unofficial, user-local, strictly read-only CLI for U of T Quercus (Canvas LMS)"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Aurelio Linero Barcenas" }]
+requires-python = ">=3.11"
+dependencies = [
+  "playwright==1.58.0",
+  "requests>=2.32,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/Yeyito777/quercus"
+Repository = "https://github.com/Yeyito777/quercus"
+Issues = "https://github.com/Yeyito777/quercus/issues"
+
+[project.scripts]
+quercus = "quercus_tool.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quercus_tool"]

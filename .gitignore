@@ -1,0 +1,40 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# Local credentials and browser/session state
+.env
+.env.*
+!.env.example
+session.json
+session.lock
+browser-profile/
+state/
+*.pem
+*.key
+
+# Local downloads and logs
+downloads/
+*.log
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
