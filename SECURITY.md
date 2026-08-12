@@ -12,6 +12,7 @@
 - The Quercus state root is mode `0700`; `session.json` and its lock are mode `0600`. vimbrowser controls the isolated context's storage permissions. State is not separately encrypted at rest, so compromise of the owner's Unix account can expose it.
 - Automatic renewal opens one exact transient tab in the configured named context, validates the exact context response and expected Canvas user ID, and never chooses among existing tabs/accounts. If browser state cannot renew silently, the helper requires an interactive persistent login.
 - `quercus logout` deletes only helper-owned local credentials. The vimbrowser-owned context remains signed in; logout does not revoke U of T server-side sessions or sign out vimbrowser.
+- Legacy releases stored browser state in `~/.local/state/quercus/browser-profile/`. Version 0.2 no longer reads or manages that Playwright profile; remove it after migration so obsolete signed-in state is not retained.
 
 ## Read-only application boundary
 

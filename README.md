@@ -176,6 +176,9 @@ Defaults:
 The renewable browser context is owned and stored by vimbrowser, not beneath the Quercus state directory.
 Saved version-1 sessions from older releases with renewal mode `persistent-browser` are read as
 `vimbrowser` sessions automatically; their next renewal uses the configured named context.
+Releases before 0.2 stored browser state in `~/.local/state/quercus/browser-profile/`. That legacy
+Playwright profile is no longer read or managed. After confirming the named vimbrowser context works,
+remove the old directory if it still exists so it does not retain obsolete signed-in browser state.
 
 Testing/isolated-deployment overrides:
 
