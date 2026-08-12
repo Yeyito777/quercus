@@ -110,6 +110,53 @@ class BrowserImportTests(unittest.TestCase):
         self.assertEqual(clock.sleeps, [1.0])
         self.assertEqual(runner.responses, [])
 
+    def test_context_acquisition_tolerates_cookie_manager_startup_race(self):
+        command = ["vimbrowser-cli", "cookies", "55", CANVAS_URL]
+        unavailable = subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="ERR tab has no browser",
+        )
+        runner = Runner([
+            (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
+            (["open-context", "quercus-helper", CANVAS_URL], {
+                "active_tabid": 55, "url": CANVAS_URL, "context": "quercus-helper",
+            }),
+            (["cookies", "55", CANVAS_URL], unavailable),
+            (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
+            (["close-tab", "55"], {}),
+            (["focus", "44"], {}),
+        ])
+        clock = Clock()
+        auth = VimbrowserAuthenticator(
+            runner=runner,
+            clock=clock,
+            sleeper=clock.sleep,
+            profile_loader=lambda _: {"id": 42, "name": "Test Student"},
+        )
+
+        session = auth.acquire(interactive=True)
+
+        self.assertEqual(session.user["id"], 42)
+        self.assertEqual(clock.sleeps, [1.0])
+        self.assertEqual(runner.responses, [])
+
+    def test_explicit_import_does_not_hide_cookie_command_failure(self):
+        command = ["vimbrowser-cli", "cookies", "5", CANVAS_URL]
+        unavailable = subprocess.CompletedProcess(command, 1, stdout="", stderr="ERR tab has no browser")
+        runner = Runner([
+            (["tabs", "--json"], tabs(
+                {"id": 5, "url": "https://q.utoronto.ca/courses/1", "active": True},
+                active=5,
+            )),
+            (["cookies", "5", CANVAS_URL], unavailable),
+        ])
+
+        with self.assertRaises(BrowserImportError):
+            VimbrowserAuthenticator(runner=runner).import_session(tab_id=5)
+        self.assertEqual(runner.responses, [])
+
     def test_account_mismatch_fails_without_guessing_and_still_cleans_up(self):
         runner = Runner([
             (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),

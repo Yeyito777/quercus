@@ -185,11 +185,19 @@ class VimbrowserAuthenticator:
         *,
         source: str,
         renewal_mode: str,
+        tolerate_cookie_command_failure: bool = False,
     ) -> CanvasSession | None:
-        payload = self._json(
-            self._run("cookies", str(tab_id), CANVAS_URL),
-            "cookies",
-        )
+        try:
+            raw = self._run("cookies", str(tab_id), CANVAS_URL)
+        except BrowserImportError:
+            # open-context can return the newly allocated exact tab before its
+            # browser backend is ready to service cookie-manager commands. This
+            # is a normal bounded startup race during acquisition, but an
+            # explicit one-shot import must continue to fail immediately.
+            if tolerate_cookie_command_failure:
+                return None
+            raise
+        payload = self._json(raw, "cookies")
         rows = payload.get("cookies")
         if not isinstance(rows, list):
             raise BrowserImportError("vimbrowser did not return its cookie list")
@@ -290,6 +298,7 @@ class VimbrowserAuthenticator:
                     opened_tab,
                     source=f"vimbrowser-context:{self.context}",
                     renewal_mode="vimbrowser",
+                    tolerate_cookie_command_failure=True,
                 )
                 if session is not None:
                     if expected_user_id is not None and session.user["id"] != expected_user_id:
