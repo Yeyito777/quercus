@@ -92,7 +92,7 @@ class CanvasClient:
     def _base_headers(*, json_response: bool = True) -> dict[str, str]:
         return {
             "Accept": "application/json" if json_response else "*/*",
-            "User-Agent": "quercus-readonly-helper/0.1",
+            "User-Agent": "quercus-readonly-helper/0.2",
         }
 
     @staticmethod

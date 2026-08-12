@@ -22,7 +22,6 @@ dist/
 !.env.example
 session.json
 session.lock
-browser-profile/
 state/
 *.pem
 *.key

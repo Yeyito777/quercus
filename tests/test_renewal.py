@@ -11,7 +11,7 @@ from quercus_tool.renewal import load_or_refresh_session
 from quercus_tool.session import load_session, save_session
 
 
-class BrowserAuthenticator:
+class VimbrowserAuthenticator:
     def __init__(self, result):
         self.result = result
         self.calls = []
@@ -27,14 +27,14 @@ class RenewalTests(unittest.TestCase):
             root = Path(directory)
             path = root / "session.json"
             lock = root / "lock"
-            current = session(renewal_mode="persistent-browser")
+            current = session(renewal_mode="vimbrowser")
             save_session(current, path=path, lock=lock)
-            browser = BrowserAuthenticator(session(renewal_mode="persistent-browser"))
+            browser = VimbrowserAuthenticator(session(renewal_mode="vimbrowser"))
             result, _, profile = load_or_refresh_session(
                 path=path,
                 lock=lock,
                 validator=lambda value: (object(), value.user),
-                browser_authenticator=browser,
+                vimbrowser_authenticator=browser,
             )
             self.assertEqual(result.user["id"], current.user["id"])
             self.assertEqual(profile["id"], current.user["id"])
@@ -58,10 +58,10 @@ class RenewalTests(unittest.TestCase):
             root = Path(directory)
             path = root / "session.json"
             lock = root / "lock"
-            old = session(renewal_mode="persistent-browser", user_id=42)
-            renewed = session(renewal_mode="persistent-browser", user_id=42)
+            old = session(renewal_mode="vimbrowser", user_id=42)
+            renewed = session(renewal_mode="vimbrowser", user_id=42)
             save_session(old, path=path, lock=lock)
-            browser = BrowserAuthenticator(renewed)
+            browser = VimbrowserAuthenticator(renewed)
             calls = 0
 
             def validate(value):
@@ -75,7 +75,7 @@ class RenewalTests(unittest.TestCase):
                 path=path,
                 lock=lock,
                 validator=validate,
-                browser_authenticator=browser,
+                vimbrowser_authenticator=browser,
             )
             self.assertEqual(result.user["id"], 42)
             self.assertEqual(browser.calls, [{"interactive": False, "expected_user_id": 42}])

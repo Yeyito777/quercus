@@ -13,7 +13,8 @@ from .storage import atomic_write_json, exclusive_lock, read_private_json
 CANVAS_BASE_URL = "https://q.utoronto.ca"
 CANVAS_HOST = "q.utoronto.ca"
 SESSION_VERSION = 1
-RENEWAL_MODES = {"none", "persistent-browser"}
+RENEWAL_MODES = {"none", "vimbrowser"}
+LEGACY_RENEWAL_MODE = "persistent-browser"
 MAX_COOKIES = 200
 
 
@@ -131,12 +132,18 @@ class CanvasSession:
         if not isinstance(raw, dict):
             raise SessionRejectedError("the saved Quercus session has an invalid format")
         try:
+            renewal_mode = str(raw["renewal_mode"])
+            source = str(raw["source"])
+            if renewal_mode == LEGACY_RENEWAL_MODE:
+                renewal_mode = "vimbrowser"
+                if source == LEGACY_RENEWAL_MODE:
+                    source = "vimbrowser"
             session = cls(
                 version=int(raw["version"]),
                 base_url=str(raw["base_url"]),
                 imported_at=int(raw["imported_at"]),
-                source=str(raw["source"]),
-                renewal_mode=str(raw["renewal_mode"]),
+                source=source,
+                renewal_mode=renewal_mode,
                 user=normalize_profile(raw["user"]),
                 cookies=[normalize_cookie(value) for value in raw["cookies"]],
             )
@@ -162,7 +169,7 @@ class CanvasSession:
             "authenticated": True,
             "source": self.source,
             "importedAt": utc_iso(self.imported_at),
-            "automaticRenewal": self.renewal_mode == "persistent-browser",
+            "automaticRenewal": self.renewal_mode == "vimbrowser",
             "renewalMode": self.renewal_mode,
             "cookieCount": len(self.cookies),
             "user": dict(self.user),

@@ -10,27 +10,26 @@ from pathlib import Path
 from helpers import session
 
 from quercus_tool.errors import SessionRejectedError, UnsafeFileError
-from quercus_tool.persistent_browser import PersistentBrowserAuthenticator
 from quercus_tool.session import CanvasSession, load_session, save_session
 
 
 class SessionStorageTests(unittest.TestCase):
-    def test_browser_page_profile_accepts_canvas_string_user_id(self):
-        class Page:
-            @staticmethod
-            def evaluate(_):
-                return {"id": "123456", "name": "Test Student", "primary_email": "student@example.edu"}
-
-        profile = PersistentBrowserAuthenticator._profile_from_page(Page())
-        self.assertEqual(profile["id"], 123456)
-        self.assertEqual(profile["primaryEmail"], "student@example.edu")
-
     def test_public_projection_never_contains_cookie_material(self):
-        current = session(renewal_mode="persistent-browser")
+        current = session(renewal_mode="vimbrowser")
         serialized = json.dumps(current.public())
         self.assertNotIn("example-cookie-value", serialized)
         self.assertNotIn("test_session", serialized)
         self.assertTrue(current.public()["automaticRenewal"])
+        self.assertEqual(current.public()["renewalMode"], "vimbrowser")
+
+    def test_legacy_persistent_browser_session_migrates_in_memory(self):
+        raw = asdict(session(renewal_mode="vimbrowser"))
+        raw["renewal_mode"] = "persistent-browser"
+        raw["source"] = "persistent-browser"
+        migrated = CanvasSession.from_dict(raw)
+        self.assertEqual(migrated.renewal_mode, "vimbrowser")
+        self.assertEqual(migrated.source, "vimbrowser")
+        self.assertTrue(migrated.public()["automaticRenewal"])
 
     def test_cookie_outside_utoronto_is_rejected(self):
         with self.assertRaises(SessionRejectedError):

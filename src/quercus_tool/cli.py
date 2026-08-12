@@ -6,12 +6,11 @@ import sys
 from typing import Any
 
 from . import __version__
-from .browser_import import VimbrowserImporter
+from .browser_import import VimbrowserAuthenticator
 from .canvas import Quercus, parse_duration, positive_id
 from .client import CanvasClient
 from .downloads import Downloads
 from .errors import QuercusError, UsageError
-from .persistent_browser import PersistentBrowserAuthenticator, delete_browser_profile
 from .renewal import load_or_refresh_session
 from .session import delete_session, save_session
 
@@ -76,10 +75,10 @@ def command_login(args: argparse.Namespace) -> None:
         if args.tab is not None:
             raise UsageError("--tab is valid only with --from-vimbrowser")
         if not args.json:
-            print("Opening the helper-owned Quercus session. Complete U of T sign-in and Duo if prompted.")
-        session = PersistentBrowserAuthenticator().acquire(interactive=True)
+            print("Opening the isolated Quercus vimbrowser context. Complete U of T sign-in and Duo if prompted.")
+        session = VimbrowserAuthenticator().acquire(interactive=True)
     else:
-        session = VimbrowserImporter().import_session(tab_id=args.tab)
+        session = VimbrowserAuthenticator().import_session(tab_id=args.tab)
     client = CanvasClient(session)
     profile = session.assert_account(client.profile())
     save_session(session)
@@ -87,8 +86,8 @@ def command_login(args: argparse.Namespace) -> None:
     if args.json:
         emit_json(result)
     else:
-        if session.renewal_mode == "persistent-browser":
-            print("Authenticated with a helper-owned renewable Quercus browser session.")
+        if session.renewal_mode == "vimbrowser":
+            print("Authenticated with a renewable isolated vimbrowser context.")
         else:
             print("Authenticated with an imported short-lived Quercus browser session.")
         print(f"  Name:    {profile.get('name') or '-'}")
@@ -98,12 +97,11 @@ def command_login(args: argparse.Namespace) -> None:
 
 def command_logout(args: argparse.Namespace) -> None:
     removed = delete_session()
-    browser_removed = delete_browser_profile()
-    result = {"loggedOut": True, "sessionRemoved": removed, "browserProfileRemoved": browser_removed}
+    result = {"loggedOut": True, "sessionRemoved": removed, "vimbrowserSessionPreserved": True}
     if args.json:
         emit_json(result)
     else:
-        print("Logged out locally and removed helper-owned Quercus credentials.")
+        print("Removed the helper's local session. The vimbrowser context remains signed in.")
 
 
 def command_status(args: argparse.Namespace) -> None:
@@ -353,13 +351,13 @@ def parser() -> argparse.ArgumentParser:
 
     login = commands.add_parser("login", help="initialize or import a Quercus browser session")
     source = login.add_mutually_exclusive_group(required=True)
-    source.add_argument("--persistent", action="store_true", help="initialize the helper-owned renewable browser session")
+    source.add_argument("--persistent", action="store_true", help="sign in through the renewable isolated vimbrowser context")
     source.add_argument("--from-vimbrowser", action="store_true", help="import cookies from one exact authenticated Quercus tab")
     login.add_argument("--tab", type=int, help="exact vimbrowser Quercus tab ID")
     add_json(login)
     login.set_defaults(func=command_login)
 
-    logout = commands.add_parser("logout", help="delete only the helper's local session/profile")
+    logout = commands.add_parser("logout", help="delete only the helper's local session (not vimbrowser sign-in)")
     add_json(logout)
     logout.set_defaults(func=command_logout)
     status = commands.add_parser("status", help="validate the saved session and account")

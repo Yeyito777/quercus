@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from quercus_tool.canvas import DiscoveryList
-from quercus_tool.cli import command_files, command_pages
+from quercus_tool.cli import command_files, command_logout, command_pages
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,7 +39,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("strictly read-only", help_result.stdout)
         version = self.run_cli("--version")
         self.assertEqual(version.returncode, 0)
-        self.assertIn("0.1.0", version.stdout)
+        self.assertIn("0.2.0", version.stdout)
 
     def test_missing_json_session_error_is_stable_and_secret_free(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -60,6 +60,18 @@ class CliTests(unittest.TestCase):
         result = self.run_cli("courses", "--limit", "101", "--json")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr)["error"]["kind"], "UsageError")
+
+    def test_logout_json_says_vimbrowser_session_is_preserved(self):
+        output = io.StringIO()
+        with (
+            patch("quercus_tool.cli.delete_session", return_value=True),
+            redirect_stdout(output),
+        ):
+            command_logout(Namespace(json=True))
+        data = json.loads(output.getvalue())["data"]
+        self.assertEqual(data["sessionRemoved"], True)
+        self.assertEqual(data["vimbrowserSessionPreserved"], True)
+        self.assertNotIn("browserProfileRemoved", data)
 
     def test_file_json_marks_normal_collection_complete(self):
         quercus = Mock()

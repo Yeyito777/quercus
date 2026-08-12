@@ -4,10 +4,10 @@ from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
+from .browser_import import VimbrowserAuthenticator
 from .client import CanvasClient
 from .errors import SessionRejectedError, SessionRequiredError
 from .paths import lock_path, session_path
-from .persistent_browser import PersistentBrowserAuthenticator
 from .session import CanvasSession
 from .storage import atomic_write_json, exclusive_lock, read_private_json
 
@@ -31,7 +31,7 @@ def load_or_refresh_session(
     path: Path | None = None,
     lock: Path | None = None,
     validator: Callable[[CanvasSession], tuple[CanvasClient, dict]] = validate_session,
-    browser_authenticator: PersistentBrowserAuthenticator | None = None,
+    vimbrowser_authenticator: VimbrowserAuthenticator | None = None,
 ) -> tuple[CanvasSession, CanvasClient, dict]:
     target = path or session_path()
     lock_target = lock or lock_path()
@@ -49,11 +49,11 @@ def load_or_refresh_session(
             client, profile = validator(session)
             return session, client, profile
         except SessionRejectedError:
-            if session.renewal_mode != "persistent-browser":
+            if session.renewal_mode != "vimbrowser":
                 raise SessionRequiredError(
                     "the imported Quercus session expired; run `quercus login --persistent`"
                 ) from None
-        authenticator = browser_authenticator or PersistentBrowserAuthenticator()
+        authenticator = vimbrowser_authenticator or VimbrowserAuthenticator()
         renewed = authenticator.acquire(
             interactive=False,
             expected_user_id=int(session.user["id"]),

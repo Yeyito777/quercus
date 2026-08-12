@@ -2,7 +2,7 @@
 
 An unofficial, user-local, strictly read-only CLI for the University of Toronto's Quercus (Canvas LMS) instance.
 
-`quercus` owns a private persistent Chromium profile, reuses the resulting first-party Canvas cookie session, and calls a small allowlist of Canvas HTTPS `GET` endpoints. It can inspect courses, announcements, assignments, modules, files, pages, and the authenticated student's own grade/submission state. It can also download one explicitly selected course file.
+`quercus` delegates browser sign-in and renewal to an isolated persistent [`vimbrowser`](https://github.com/Yeyito777/vimbrowser) context, imports the resulting first-party Canvas cookies, and calls a small allowlist of Canvas HTTPS `GET` endpoints. It can inspect courses, announcements, assignments, modules, files, pages, and the authenticated student's own grade/submission state. It can also download one explicitly selected course file.
 
 > [!WARNING]
 > This project is not affiliated with, supported by, or endorsed by the University of Toronto or Instructure. Use it only with a Quercus account you own and at human-scale request rates.
@@ -23,12 +23,12 @@ The CLI intentionally contains **no** commands or network paths for:
 
 All direct Canvas API traffic is HTTPS `GET` to exact allowlisted paths on `https://q.utoronto.ca`. Redirects are disabled for JSON API calls. File download redirects are accepted only from an allowlisted Canvas route to HTTPS Canvas User Content/Instructure Cloud Gate/Instructure/AWS/CloudFront storage, and no Quercus cookies are sent to those storage hosts.
 
-The saved browser profile and cookies nevertheless have the broader capabilities of a normal signed-in Quercus browser. Read-only behavior is enforced by this local CLI, not by server-side cookie scopes. See [SECURITY.md](SECURITY.md).
+The vimbrowser-owned context and saved helper cookies nevertheless have the broader capabilities of a normal signed-in Quercus browser. Read-only behavior is enforced by this local CLI, not by server-side cookie scopes. See [SECURITY.md](SECURITY.md).
 
 ## Features
 
-- Private persistent U of T/Quercus sign-in through Playwright Chromium.
-- Best-effort headless session recovery through the helper-owned profile.
+- Private persistent U of T/Quercus sign-in through a named, isolated vimbrowser context.
+- Best-effort session recovery through the same vimbrowser-owned context.
 - Exact optional cookie import from one authenticated `vimbrowser` Quercus tab.
 - Course aliases with ambiguity detection rather than first-match guessing.
 - Announcement bodies and safe local link extraction.
@@ -46,7 +46,8 @@ The saved browser profile and cookies nevertheless have the broader capabilities
 - Linux (session storage uses `fcntl` locking)
 - Python 3.11 or newer
 - [`uv`](https://docs.astral.sh/uv/)
-- X11 for initial interactive authentication
+- A running vimbrowser with `vimbrowser-cli` installed or discoverable
+- X11 for interactive authentication
 - A University of Toronto Quercus account
 
 ## Install
@@ -57,7 +58,6 @@ Clone the public repository and create its isolated environment:
 git clone https://github.com/Yeyito777/quercus.git
 cd quercus
 uv sync --locked
-uv run playwright install chromium
 ./quercus --help
 ```
 
@@ -71,9 +71,11 @@ Recommended renewable mode:
 ./quercus login --persistent
 ```
 
-A dedicated Chromium window opens. Complete U of T sign-in and Duo normally. Once Canvas's current-user profile endpoint succeeds, the helper saves the relevant first-party cookie set and closes the window.
+A transient tab opens in vimbrowser's persistent isolated `quercus-helper` context. Complete U of T sign-in and Duo normally. Once Canvas's current-user profile endpoint succeeds, the helper saves the relevant first-party cookie set, closes only the transient tab it opened, and restores the previously active tab where practical.
 
-Normal commands first use the saved cookies directly. If Canvas redirects that session to sign-in, the helper starts its dedicated profile headlessly and attempts to renew through existing U of T browser state. If Duo or another human check is required, it fails with exit code 3 and asks for another interactive login.
+Normal commands first use the saved cookies directly. If Canvas redirects that session to sign-in, the helper opens another transient tab in the same isolated context and attempts silent renewal through its existing browser state. It validates that renewal produced the same Canvas user ID and never selects among existing tabs or accounts. If Duo or another human check is required, it safely fails with exit code 3 and asks for another `login --persistent`.
+
+The context name defaults to `quercus-helper`. Set `QUERCUS_VIMBROWSER_CONTEXT` to another valid vimbrowser context name (1-48 lowercase letters, numbers, `_`, or `-`) before the first login if isolation under a different name is desired. Continue using the same setting for renewal.
 
 Renewal is best-effort, not permanent. Password changes, explicit revocation, Conditional Access, MFA policy, inactivity, upstream changes, or U of T session limits can require human authentication.
 
@@ -85,7 +87,7 @@ If Quercus is already authenticated in `vimbrowser`:
 ./quercus login --from-vimbrowser --tab TAB_ID
 ```
 
-This copies only cookies visible to `https://q.utoronto.ca/`, validates them against `/api/v1/users/self/profile`, and stores them privately. It does **not** copy U of T SSO state or enable automatic renewal. When several Quercus tabs exist, `--tab` is mandatory; the helper never guesses among them.
+This compatibility flow copies only cookies visible to `https://q.utoronto.ca/`, validates them against `/api/v1/users/self/profile`, and stores them privately. It does **not** copy U of T SSO state or enable automatic renewal. When several Quercus tabs exist, `--tab` is mandatory; the helper never guesses among them.
 
 ## Commands
 
@@ -169,19 +171,22 @@ Defaults:
 ```text
 ~/.local/state/quercus/session.json
 ~/.local/state/quercus/session.lock
-~/.local/state/quercus/browser-profile/
 ```
+
+The renewable browser context is owned and stored by vimbrowser, not beneath the Quercus state directory.
+Saved version-1 sessions from older releases with renewal mode `persistent-browser` are read as
+`vimbrowser` sessions automatically; their next renewal uses the configured named context.
 
 Testing/isolated-deployment overrides:
 
 ```text
 QUERCUS_SESSION_FILE
 QUERCUS_SESSION_LOCK_FILE
-QUERCUS_BROWSER_PROFILE
 QUERCUS_VIMBROWSER_CLI
+QUERCUS_VIMBROWSER_CONTEXT
 ```
 
-`quercus logout` removes helper-owned local cookies and the dedicated browser profile. It does not revoke U of T server-side sessions or sign out unrelated browsers.
+`quercus logout` removes only the helper-owned `session.json`. It deliberately leaves the vimbrowser-owned context and its sign-in state intact; it does not sign out vimbrowser or revoke U of T server-side sessions. Use browser/U of T session controls when sign-out or revocation is required.
 
 ## JSON and exit codes
 
@@ -196,13 +201,12 @@ Successful JSON has `schemaVersion: 1` and a `data` value. Structured errors use
 | 4 | Session rejected or belongs to another account |
 | 5 | Quercus/network/protocol failure |
 | 6 | Unsafe or invalid local file operation |
-| 7 | Optional vimbrowser import failure |
+| 7 | vimbrowser delegation/import failure |
 
 ## Development
 
 ```bash
 uv sync --locked
-uv run playwright install chromium
 .venv/bin/python -m unittest discover -s tests -v
 ```
 

@@ -4,13 +4,14 @@
 
 ## Authentication boundary
 
-- The recommended `login --persistent` flow creates a dedicated Chromium profile beneath the private Quercus state directory. The account owner completes U of T sign-in and Duo in that profile when required.
-- The profile stores Quercus, U of T identity-provider, and possibly Duo/browser state. These credentials have the practical sensitivity of a signed-in browser and may permit actions far beyond this CLI.
+- The recommended `login --persistent` flow opens one transient tab in a named, isolated persistent vimbrowser context. The account owner completes U of T sign-in and Duo in that context when required. Quercus closes only the tab it opened and restores prior focus where practical.
+- The context is owned and stored by vimbrowser. It stores Quercus, U of T identity-provider, and possibly Duo/browser state. These credentials have the practical sensitivity of a signed-in browser and may permit actions far beyond this CLI.
 - `session.json` contains only the cookies currently applicable to `https://q.utoronto.ca/`, a minimal account identity projection, and renewal metadata. It does not contain a password or Duo secret.
 - `login --from-vimbrowser` copies only cookies visible to the exact Quercus origin and does not copy the broad browser/SSO profile. It is short lived and cannot renew itself.
 - Credentials are never accepted through argv, printed, logged, placed in errors, or emitted as JSON.
-- The state root and browser profile are mode `0700`; `session.json` and its lock are mode `0600`. State is not separately encrypted at rest, so compromise of the owner's Unix account can expose it.
-- `quercus logout` deletes helper-owned local credentials. It does not revoke U of T server-side sessions or affect unrelated browsers.
+- The Quercus state root is mode `0700`; `session.json` and its lock are mode `0600`. vimbrowser controls the isolated context's storage permissions. State is not separately encrypted at rest, so compromise of the owner's Unix account can expose it.
+- Automatic renewal opens one exact transient tab in the configured named context, validates the exact context response and expected Canvas user ID, and never chooses among existing tabs/accounts. If browser state cannot renew silently, the helper requires an interactive persistent login.
+- `quercus logout` deletes only helper-owned local credentials. The vimbrowser-owned context remains signed in; logout does not revoke U of T server-side sessions or sign out vimbrowser.
 
 ## Read-only application boundary
 
@@ -32,7 +33,6 @@
 ## Local and content boundary
 
 - Structured credential files are private regular files and are replaced atomically under a process lock.
-- Browser-profile deletion rejects symlinks and non-directories.
 - Downloads require an explicit course and file ID, are capped at 100 MiB, use sanitized server-provided filenames, reject symlink output directories/files, use mode `0600`, and do not overwrite without `--force`.
 - Announcement/page HTML conversion and link extraction are entirely local. Extracted links are not opened, resolved remotely, or fetched.
 - This design does not protect against malware or another process already running as the account owner's Unix user.
