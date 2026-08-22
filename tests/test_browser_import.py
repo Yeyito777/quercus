@@ -66,11 +66,11 @@ class BrowserImportTests(unittest.TestCase):
     def test_persistent_login_uses_exact_named_context_tab_and_restores_focus(self):
         runner = Runner([
             (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
-            (["open-context", "quercus-helper", CANVAS_URL], {
-                "active_tabid": 55,
-                "url": CANVAS_URL,
-                "context": "quercus-helper",
-            }),
+            (["open-context", "quercus-helper", CANVAS_URL], tabs(
+                {"id": 44, "url": "https://example.com/", "active": True},
+                {"id": 55, "url": CANVAS_URL, "active": False, "context": "quercus-helper"},
+            )),
+            (["focus", "55"], {}),
             (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
             (["close-tab", "55"], {}),
             (["focus", "44"], {}),
@@ -94,9 +94,10 @@ class BrowserImportTests(unittest.TestCase):
         clock = Clock()
         runner = Runner([
             (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
-            (["open-context", "quercus-helper", CANVAS_URL], {
-                "active_tabid": 55, "url": CANVAS_URL, "context": "quercus-helper",
-            }),
+            (["open-context", "quercus-helper", CANVAS_URL], tabs(
+                {"id": 44, "url": "https://example.com/", "active": True},
+                {"id": 55, "url": CANVAS_URL, "active": False, "context": "quercus-helper"},
+            )),
             (["cookies", "55", CANVAS_URL], {"cookies": []}),
             (["cookies", "55", CANVAS_URL], {"cookies": []}),
             (["close-tab", "55"], {}),
@@ -120,9 +121,11 @@ class BrowserImportTests(unittest.TestCase):
         )
         runner = Runner([
             (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
-            (["open-context", "quercus-helper", CANVAS_URL], {
-                "active_tabid": 55, "url": CANVAS_URL, "context": "quercus-helper",
-            }),
+            (["open-context", "quercus-helper", CANVAS_URL], tabs(
+                {"id": 44, "url": "https://example.com/", "active": True},
+                {"id": 55, "url": CANVAS_URL, "active": False, "context": "quercus-helper"},
+            )),
+            (["focus", "55"], {}),
             (["cookies", "55", CANVAS_URL], unavailable),
             (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
             (["close-tab", "55"], {}),
@@ -160,9 +163,10 @@ class BrowserImportTests(unittest.TestCase):
     def test_account_mismatch_fails_without_guessing_and_still_cleans_up(self):
         runner = Runner([
             (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
-            (["open-context", "quercus-helper", CANVAS_URL], {
-                "active_tabid": 55, "url": CANVAS_URL, "context": "quercus-helper",
-            }),
+            (["open-context", "quercus-helper", CANVAS_URL], tabs(
+                {"id": 44, "url": "https://example.com/", "active": True},
+                {"id": 55, "url": CANVAS_URL, "active": False, "context": "quercus-helper"},
+            )),
             (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
             (["close-tab", "55"], {}),
             (["focus", "44"], {}),
@@ -176,12 +180,15 @@ class BrowserImportTests(unittest.TestCase):
             auth.acquire(interactive=False, expected_user_id=42)
         self.assertEqual(runner.responses, [])
 
-    def test_open_context_response_must_confirm_new_id_context_and_https_host(self):
+    def test_open_context_response_must_confirm_one_new_exact_https_context_tab(self):
         cases = [
-            {"active_tabid": 44, "url": CANVAS_URL, "context": "quercus-helper"},
-            {"active_tabid": 55, "url": CANVAS_URL, "context": "other"},
-            {"active_tabid": 55, "url": "https://q.utoronto.ca.evil.example/", "context": "quercus-helper"},
-            {"active_tabid": True, "url": CANVAS_URL, "context": "quercus-helper"},
+            tabs({"id": 44, "url": CANVAS_URL, "context": "quercus-helper"}),
+            tabs({"id": 55, "url": CANVAS_URL, "context": "other"}),
+            tabs({"id": 55, "url": "http://q.utoronto.ca/", "context": "quercus-helper"}),
+            tabs(
+                {"id": 55, "url": CANVAS_URL, "context": "quercus-helper"},
+                {"id": 56, "url": CANVAS_URL, "context": "quercus-helper"},
+            ),
         ]
         for opened in cases:
             with self.subTest(opened=opened):

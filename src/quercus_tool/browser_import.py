@@ -256,18 +256,39 @@ class VimbrowserAuthenticator:
             self._run("open-context", self.context, CANVAS_URL),
             "open-context",
         )
-        tab_id = self._tab_id(opened.get("active_tabid"))
-        if (
-            tab_id is None
-            or tab_id in existing_ids
-            or opened.get("context") != self.context
-            or not self._is_canvas_url(opened.get("url"))
-        ):
+        # ``open-context`` opens a background tab and intentionally leaves the
+        # user's visible tab active.  Its top-level active_tabid therefore is not
+        # the allocation we requested; identify that allocation in the returned
+        # post-open tab snapshot by a new stable ID and the exact named context.
+        rows = opened.get("tabs")
+        if not isinstance(rows, list):
+            raise BrowserImportError("vimbrowser did not return the post-open tab list")
+        candidates: list[int] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            tab_id = self._tab_id(row.get("id"))
+            if tab_id is None or tab_id in existing_ids or row.get("context") != self.context:
+                continue
+            try:
+                parsed = urlsplit(str(row.get("url") or ""))
+                safe_https = (
+                    parsed.scheme == "https"
+                    and parsed.hostname is not None
+                    and parsed.port in (None, 443)
+                    and parsed.username is None
+                    and parsed.password is None
+                )
+            except ValueError:
+                safe_https = False
+            if safe_https:
+                candidates.append(tab_id)
+        if len(candidates) != 1:
             # Do not act on an unverified ID: closing it could destroy a user tab.
             raise BrowserImportError(
-                "vimbrowser did not confirm the exact newly opened Quercus context tab"
+                "vimbrowser did not identify one exact new Quercus helper-context tab"
             )
-        return original_active, tab_id
+        return original_active, candidates[0]
 
     def _restore_tabs(self, opened_tab: int, original_active: int | None) -> None:
         try:
@@ -293,6 +314,11 @@ class VimbrowserAuthenticator:
         timeout = min(max(requested_timeout, 0.0), MAX_AUTH_SECONDS)
         deadline = self.clock() + timeout
         try:
+            if interactive:
+                # Duo's browser check is visibility-sensitive in vimbrowser.
+                # Interactive persistent login is explicitly user-visible; the
+                # original focus is restored in the bounded cleanup below.
+                self._run("focus", str(opened_tab))
             for _ in range(MAX_AUTH_POLLS):
                 session = self._read_session(
                     opened_tab,
