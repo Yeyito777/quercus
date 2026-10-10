@@ -63,6 +63,25 @@ def tabs(*rows, active=44):
 
 
 class BrowserImportTests(unittest.TestCase):
+    def test_compact_open_response_fetches_exact_context_tab(self):
+        runner = Runner([
+            (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
+            (["open-context", "quercus-helper", CANVAS_URL], {"tabs": 2, "active_tabid": 55}),
+            (["tabs", "--json"], tabs(
+                {"id": 44, "url": "https://example.com/", "active": False},
+                {"id": 55, "url": CANVAS_URL, "active": True, "context": "quercus-helper"},
+                active=55,
+            )),
+            (["focus", "55"], {}),
+            (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
+            (["close-tab", "55"], {}),
+            (["focus", "44"], {}),
+        ])
+        auth = VimbrowserAuthenticator(runner=runner, profile_loader=lambda _: {"id": 42})
+        session = auth.acquire(interactive=True)
+        self.assertEqual(session.source, "vimbrowser-context:quercus-helper")
+        self.assertEqual(runner.responses, [])
+
     def test_persistent_login_uses_exact_named_context_tab_and_restores_focus(self):
         runner = Runner([
             (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),

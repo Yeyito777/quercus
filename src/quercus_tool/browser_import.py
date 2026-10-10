@@ -262,7 +262,9 @@ class VimbrowserAuthenticator:
         # post-open tab snapshot by a new stable ID and the exact named context.
         rows = opened.get("tabs")
         if not isinstance(rows, list):
-            raise BrowserImportError("vimbrowser did not return the post-open tab list")
+            # Current IPC returns compact status, not the full tab snapshot.
+            # Preserve new-ID/exact-context validation using an explicit read.
+            rows = self._tabs_payload()["tabs"]
         candidates: list[int] = []
         for row in rows:
             if not isinstance(row, dict):
