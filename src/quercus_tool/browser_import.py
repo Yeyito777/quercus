@@ -309,6 +309,7 @@ class VimbrowserAuthenticator:
         interactive: bool,
         expected_user_id: int | None,
         timeout_seconds: float | None,
+        assistant: Any = None,
     ) -> CanvasSession:
         original_active, opened_tab = self._open_context_tab()
         default_timeout = MAX_AUTH_SECONDS if interactive else 75.0
@@ -336,6 +337,10 @@ class VimbrowserAuthenticator:
                     return session
                 if self.clock() >= deadline:
                     break
+                if assistant is not None:
+                    # Unattended re-login (autologin.py): fill U of T weblogin
+                    # and approve our own Duo push in this exact helper tab.
+                    assistant.step(opened_tab)
                 self.sleeper(1.0)
         finally:
             self._restore_tabs(opened_tab, original_active)
@@ -353,6 +358,7 @@ class VimbrowserAuthenticator:
         interactive: bool,
         expected_user_id: int | None = None,
         timeout_seconds: float | None = None,
+        assistant: Any = None,
     ) -> CanvasSession:
         """Open one transient named-context tab and import a renewable session."""
         try:
@@ -360,6 +366,7 @@ class VimbrowserAuthenticator:
                 interactive=interactive,
                 expected_user_id=expected_user_id,
                 timeout_seconds=timeout_seconds,
+                assistant=assistant,
             )
         except BrowserImportError:
             if interactive:
