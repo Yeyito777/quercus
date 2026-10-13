@@ -8,12 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from helpers import session
-from quercus_tool import autologin
+
 from quercus_tool.autologin import Assistant, attempt
 from quercus_tool.errors import SessionRejectedError, SessionRequiredError
 from quercus_tool.renewal import load_or_refresh_session
 from quercus_tool.session import save_session
-
 
 WEBLOGIN = "https://idpz.utorauth.utoronto.ca/idp/profile/SAML2/Redirect/SSO?execution=e1s1"
 DUO = "https://api-0123abcd.duosecurity.com/frame/v4/auth/prompt?sid=x"
@@ -172,9 +171,8 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(self.run_attempt(FakeRunner(), lambda _h: "ok", now=10_000.0 + 31 * 60), "ok")
 
     def test_can_be_disabled(self) -> None:
-        with patch.dict("os.environ", {"QUERCUS_AUTOLOGIN": "0"}):
-            with self.assertRaises(SessionRequiredError) as caught:
-                self.run_attempt(FakeRunner(), lambda _h: "ok")
+        with patch.dict("os.environ", {"QUERCUS_AUTOLOGIN": "0"}), self.assertRaises(SessionRequiredError) as caught:
+            self.run_attempt(FakeRunner(), lambda _h: "ok")
         self.assertIs(caught.exception, self.original)
 
 
@@ -184,7 +182,8 @@ class RenewalHookTests(unittest.TestCase):
         fresh = session(renewal_mode="vimbrowser", user_id=42)
 
         class Browser:
-            calls: list[dict] = []
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
 
             def acquire(self, **kwargs):
                 self.calls.append(kwargs)

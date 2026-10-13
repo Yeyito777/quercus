@@ -18,14 +18,14 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 from .errors import QuercusError, SessionRequiredError
 from .paths import state_dir, vimbrowser_cli
 from .storage import atomic_write_json, read_private_json
-
 
 TOOL = "quercus"
 DISABLE_ENV = "QUERCUS_AUTOLOGIN"
