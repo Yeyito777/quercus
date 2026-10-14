@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
+import tempfile
+import time
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from quercus_tool.browser_import import (
     CANVAS_URL,
     CHROMIUM_EPOCH_OFFSET_SECONDS,
+    SIGN_IN_SETTLE_POLLS,
     VimbrowserAuthenticator,
 )
 from quercus_tool.errors import (
@@ -60,6 +67,25 @@ class Clock:
 
 def tabs(*rows, active=44):
     return {"active_tabid": active, "tabs": list(rows)}
+
+
+WEBLOGIN = "https://idpz.utorauth.utoronto.ca/idp/profile/SAML2/Redirect/SSO?execution=e1s1"
+_state = tempfile.TemporaryDirectory()
+_environment = patch.dict(os.environ, {"XDG_STATE_HOME": _state.name})
+
+
+def setUpModule():
+    # The helper-tab ledger defaults to the state directory; keep it private to the tests.
+    _environment.start()
+
+
+def tearDownModule():
+    _environment.stop()
+    _state.cleanup()
+
+
+def opened_helper(url=CANVAS_URL, *, loading=False):
+    return {"id": 55, "url": url, "active": False, "loading": loading, "context": "quercus-helper"}
 
 
 class BrowserImportTests(unittest.TestCase):
@@ -118,6 +144,7 @@ class BrowserImportTests(unittest.TestCase):
                 {"id": 55, "url": CANVAS_URL, "active": False, "context": "quercus-helper"},
             )),
             (["cookies", "55", CANVAS_URL], {"cookies": []}),
+            (["tabs", "--json"], tabs(opened_helper())),
             (["cookies", "55", CANVAS_URL], {"cookies": []}),
             (["close-tab", "55"], {}),
             (["focus", "44"], {}),
@@ -129,6 +156,98 @@ class BrowserImportTests(unittest.TestCase):
 
         self.assertEqual(clock.sleeps, [1.0])
         self.assertEqual(runner.responses, [])
+
+    def test_silent_renewal_stops_early_once_resting_on_weblogin(self):
+        clock = Clock()
+        polls = []
+        # Loading or Canvas pages reset the count; only settled sign-in pages count.
+        states = [opened_helper(WEBLOGIN, loading=True), opened_helper()] + [opened_helper(WEBLOGIN)] * SIGN_IN_SETTLE_POLLS
+        for state in states:
+            polls += [(["cookies", "55", CANVAS_URL], {"cookies": []}), (["tabs", "--json"], tabs(state))]
+        runner = Runner([
+            (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
+            (["open-context", "quercus-helper", CANVAS_URL], tabs(
+                {"id": 44, "url": "https://example.com/", "active": True}, opened_helper(),
+            )),
+            *polls,
+            (["close-tab", "55"], {}),
+            (["focus", "44"], {}),
+        ])
+        auth = VimbrowserAuthenticator(runner=runner, clock=clock, sleeper=clock.sleep)
+
+        with self.assertRaisesRegex(SessionRequiredError, r"needs human authentication"):
+            auth.acquire(interactive=False, expected_user_id=42)
+
+        self.assertEqual(len(clock.sleeps), len(states) - 1)
+        self.assertLess(clock.value, 75)
+        self.assertEqual(runner.responses, [])
+
+    def test_termination_signal_still_closes_the_helper_tab(self):
+        def terminate():
+            os.kill(os.getpid(), signal.SIGTERM)
+            return {"cookies": []}
+
+        class SignallingRunner(Runner):
+            def __call__(self, command, **kwargs):
+                if command[1] == "cookies":
+                    self.calls.append((command, kwargs))
+                    self.responses.pop(0)
+                    terminate()
+                return super().__call__(command, **kwargs)
+
+        runner = SignallingRunner([
+            (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
+            (["open-context", "quercus-helper", CANVAS_URL], tabs(
+                {"id": 44, "url": "https://example.com/", "active": True}, opened_helper(),
+            )),
+            (["cookies", "55", CANVAS_URL], {}),
+            (["close-tab", "55"], {}),
+            (["focus", "44"], {}),
+        ])
+        previous = signal.getsignal(signal.SIGTERM)
+        try:
+            with self.assertRaises(SystemExit) as raised:
+                VimbrowserAuthenticator(runner=runner).acquire(interactive=False)
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+        self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
+        self.assertEqual(runner.responses, [])
+
+    def test_leaked_helper_tabs_from_dead_runs_are_closed_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "helper-tabs.json"
+            dead = 2**22 + 12345  # above pid_max defaults, so never alive
+            now = time.time()
+            ledger.write_text(json.dumps({"tabs": [
+                {"id": 10, "context": "quercus-helper", "pid": dead, "openedAt": now - 60},  # leaked on weblogin
+                {"id": 11, "context": "quercus-helper", "pid": dead, "openedAt": now - 60},  # owner navigated to a course
+                {"id": 12, "context": "quercus-helper", "pid": os.getppid(), "openedAt": now},  # its run is alive
+                {"id": 13, "context": "other", "pid": dead, "openedAt": now - 60},  # another context's run
+                {"id": 14, "context": "quercus-helper", "pid": dead, "openedAt": now - 60},  # already gone
+            ]}))
+            before = tabs(
+                {"id": 44, "url": "https://example.com/", "active": True},
+                {"id": 10, "url": WEBLOGIN, "context": "quercus-helper"},
+                {"id": 11, "url": "https://q.utoronto.ca/courses/1", "context": "quercus-helper"},
+                {"id": 12, "url": WEBLOGIN, "context": "quercus-helper"},
+                {"id": 13, "url": WEBLOGIN, "context": "other"},
+                {"id": 20, "url": WEBLOGIN, "context": "quercus-helper"},  # never recorded: not ours
+            )
+            runner = Runner([
+                (["tabs", "--json"], before),
+                (["close-tab", "10"], {}),
+                (["open-context", "quercus-helper", CANVAS_URL], {"tabs": 7}),
+                (["tabs", "--json"], tabs(*before["tabs"], opened_helper())),
+                (["focus", "55"], {}),
+                (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
+                (["close-tab", "55"], {}),
+                (["focus", "44"], {}),
+            ])
+            auth = VimbrowserAuthenticator(runner=runner, profile_loader=lambda _: {"id": 42}, tab_ledger=ledger)
+            auth.acquire(interactive=True)
+            self.assertEqual(runner.responses, [])
+            remaining = sorted(entry["id"] for entry in json.loads(ledger.read_text())["tabs"])
+            self.assertEqual(remaining, [12, 13])
 
     def test_context_acquisition_tolerates_cookie_manager_startup_race(self):
         command = ["vimbrowser-cli", "cookies", "55", CANVAS_URL]
