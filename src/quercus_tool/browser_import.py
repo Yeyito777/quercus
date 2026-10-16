@@ -464,7 +464,9 @@ class VimbrowserAuthenticator:
                         break
                 self.sleeper(1.0)
         finally:
-            self._restore_tabs(opened_tab, original_active)
+            # Background renewal never took focus. Restoring an old snapshot
+            # would steal focus if the user switched tabs while we were polling.
+            self._restore_tabs(opened_tab, original_active if interactive else None)
         if interactive:
             raise SessionRequiredError(
                 "persistent login did not finish; rerun `quercus login --persistent` and complete U of T sign-in and Duo"
