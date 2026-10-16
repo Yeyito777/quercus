@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+uoft="${UOFT_ROOT:-$HOME/Desktop/uoft}"
+export QUERCUS_SESSION_FILE="${QUERCUS_SESSION_FILE:-$uoft/.private/quercus/session.json}"
+export QUERCUS_SESSION_LOCK_FILE="${QUERCUS_SESSION_LOCK_FILE:-$uoft/.private/quercus/session.lock}"
+export QUERCUS_VIMBROWSER_CLI="${QUERCUS_VIMBROWSER_CLI:-vimbrowser-cli}"
+exec "$root/quercus" "$@"

@@ -37,3 +37,5 @@ downloads/
 *~
 .DS_Store
 Thumbs.db
+config/*
+!config/.gitkeep

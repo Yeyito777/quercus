@@ -1,0 +1,6 @@
+{
+  "name": "quercus",
+  "bin": "./bin/quercus",
+  "systemHint": "You have read-only UofT Quercus access through `quercus` (source at <exocortex-source-dir>/external-tools/quercus). Run `quercus -h`; prefer --json. Assignments include the user's submission state; check page prose as well as due-date metadata. Auth uses LOCAL vimbrowser, never implicitly whale. Renew an imported session with `quercus login --from-vimbrowser --tab ID` after authenticating that exact Quercus tab, or use --persistent for a dedicated renewable context. Never start/submit quizzes through this tool. Keep cookies private. Shared state defaults to ~/Desktop/uoft/.private/quercus; copying/installing this tool creates no reminders.",
+  "display": {"label": "Quercus", "color": "#326cb3"}
+}
