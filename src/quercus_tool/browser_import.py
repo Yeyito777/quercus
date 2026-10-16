@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import autologin
 from .client import CanvasClient
 from .errors import (
     BrowserImportError,
     NetworkError,
+    QuercusError,
     SessionRejectedError,
     SessionRequiredError,
 )
-from .paths import vimbrowser_cli, vimbrowser_context
+from .paths import state_dir, vimbrowser_cli, vimbrowser_context
 from .session import CANVAS_BASE_URL, CANVAS_HOST, MAX_COOKIES, CanvasSession
+from .storage import atomic_write_json, exclusive_lock, read_private_json
 
 CHROMIUM_EPOCH_OFFSET_SECONDS = 11_644_473_600
 CANVAS_URL = CANVAS_BASE_URL + "/"
@@ -25,6 +30,39 @@ MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 MAX_AUTH_SECONDS = 600.0
 MAX_AUTH_POLLS = 600
 CONTEXT_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,47}")
+# Silent renewal stops once its tab has rested this many polls on weblogin/Duo:
+# only a human or the auto-login can continue from there.
+SIGN_IN_SETTLE_POLLS = 5
+LEDGER_MAX_AGE_SECONDS = 12 * 3600
+
+
+def _process_alive(pid: Any) -> bool:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _helper_page(url: str) -> bool:
+    """Pages a helper tab rests on before it has imported a session."""
+    if autologin.is_sign_in_url(url):
+        return True
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == CANVAS_HOST
+        and port in (None, 443)
+        and (parsed.path in ("", "/") or parsed.path.startswith("/login"))
+    )
 
 
 @dataclass(frozen=True)
@@ -47,8 +85,11 @@ class VimbrowserAuthenticator:
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
         profile_loader: Callable[[CanvasSession], dict[str, Any]] | None = None,
+        tab_ledger: Path | None = None,
     ):
         self.executable = executable or vimbrowser_cli()
+        # Tabs this tool opened and has not yet closed; see _sweep_leaked_tabs.
+        self.tab_ledger = tab_ledger or state_dir() / "helper-tabs.json"
         self.context = context or vimbrowser_context()
         self.runner = runner
         self.clock = clock
@@ -237,12 +278,70 @@ class VimbrowserAuthenticator:
             raise BrowserImportError("the selected Quercus tab has no valid importable session")
         return session
 
+    def _update_ledger(self, change: Callable[[list[dict[str, Any]]], list[dict[str, Any]]]) -> None:
+        # Best effort: a ledger problem must never block or fail a login.
+        try:
+            with exclusive_lock(self.tab_ledger.with_name(self.tab_ledger.name + ".lock")):
+                try:
+                    rows = read_private_json(self.tab_ledger).get("tabs")
+                except (FileNotFoundError, QuercusError, AttributeError):
+                    rows = []
+                entries = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+                atomic_write_json(self.tab_ledger, {"tabs": change(entries)})
+        except (OSError, QuercusError):
+            pass
+
+    def _sweep_leaked_tabs(self, rows: list[Any]) -> None:
+        """Close helper tabs left open by an earlier run that was killed.
+
+        Only exact IDs this tool recorded are considered, and only while the
+        recording process is gone, the tab is still in this context, and it is
+        still on a sign-in or Canvas landing page. Anything else is forgotten
+        untouched (the owner may have adopted the tab).
+        """
+        present = {
+            identifier: row
+            for row in rows
+            if isinstance(row, dict)
+            for identifier in [self._tab_id(row.get("id"))]
+            if identifier is not None
+        }
+        now = time.time()
+
+        def change(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            keep = []
+            for entry in entries:
+                tab_id = self._tab_id(entry.get("id"))
+                if tab_id is None:
+                    continue
+                if entry.get("context") != self.context or _process_alive(entry.get("pid")):
+                    keep.append(entry)
+                    continue
+                row = present.get(tab_id)
+                opened_at = entry.get("openedAt")
+                if (
+                    row is None
+                    or row.get("context") != self.context
+                    or not isinstance(opened_at, (int, float))
+                    or not 0 <= now - opened_at <= LEDGER_MAX_AGE_SECONDS
+                    or not _helper_page(str(row.get("url") or ""))
+                ):
+                    continue
+                try:
+                    self._run("close-tab", str(tab_id))
+                except BrowserImportError:
+                    keep.append(entry)
+            return keep
+
+        self._update_ledger(change)
+
     def _open_context_tab(self) -> tuple[int | None, int]:
         if CONTEXT_PATTERN.fullmatch(self.context) is None:
             raise BrowserImportError(
                 "the configured vimbrowser context must be 1-48 lowercase letters, numbers, '_' or '-'"
             )
         before = self._tabs_payload()
+        self._sweep_leaked_tabs(before["tabs"])
         existing_ids = {
             identifier
             for row in before["tabs"]
@@ -290,11 +389,25 @@ class VimbrowserAuthenticator:
             raise BrowserImportError(
                 "vimbrowser did not identify one exact new Quercus helper-context tab"
             )
+        entry = {"id": candidates[0], "context": self.context, "pid": os.getpid(), "openedAt": time.time()}
+        self._update_ledger(lambda entries: [*entries, entry])
         return original_active, candidates[0]
+
+    def _tab_state(self, tab_id: int) -> tuple[str, bool]:
+        """The exact tab's URL and loading flag; ("", True) when unknown."""
+        try:
+            rows = self._tabs_payload()["tabs"]
+        except BrowserImportError:
+            return "", True
+        matches = [row for row in rows if isinstance(row, dict) and self._tab_id(row.get("id")) == tab_id]
+        if len(matches) != 1:
+            return "", True
+        return str(matches[0].get("url") or ""), bool(matches[0].get("loading"))
 
     def _restore_tabs(self, opened_tab: int, original_active: int | None) -> None:
         try:
             self._run("close-tab", str(opened_tab))
+            self._update_ledger(lambda entries: [e for e in entries if e.get("id") != opened_tab])
         except BrowserImportError:
             pass
         if original_active is not None and original_active != opened_tab:
@@ -309,6 +422,7 @@ class VimbrowserAuthenticator:
         interactive: bool,
         expected_user_id: int | None,
         timeout_seconds: float | None,
+        assistant: Any = None,
     ) -> CanvasSession:
         original_active, opened_tab = self._open_context_tab()
         default_timeout = MAX_AUTH_SECONDS if interactive else 75.0
@@ -321,6 +435,7 @@ class VimbrowserAuthenticator:
                 # Interactive persistent login is explicitly user-visible; the
                 # original focus is restored in the bounded cleanup below.
                 self._run("focus", str(opened_tab))
+            settled = 0
             for _ in range(MAX_AUTH_POLLS):
                 session = self._read_session(
                     opened_tab,
@@ -336,6 +451,17 @@ class VimbrowserAuthenticator:
                     return session
                 if self.clock() >= deadline:
                     break
+                if assistant is not None:
+                    # Unattended re-login (autologin.py): fill U of T weblogin
+                    # and approve our own Duo push in this exact helper tab.
+                    assistant.step(opened_tab, self._tab_state(opened_tab)[0])
+                elif not interactive:
+                    # Don't burn the whole silent budget on a login page; callers
+                    # run under short `timeout`s and the auto-login needs the time.
+                    url, loading = self._tab_state(opened_tab)
+                    settled = settled + 1 if not loading and autologin.is_sign_in_url(url) else 0
+                    if settled >= SIGN_IN_SETTLE_POLLS:
+                        break
                 self.sleeper(1.0)
         finally:
             self._restore_tabs(opened_tab, original_active)
@@ -353,14 +479,18 @@ class VimbrowserAuthenticator:
         interactive: bool,
         expected_user_id: int | None = None,
         timeout_seconds: float | None = None,
+        assistant: Any = None,
     ) -> CanvasSession:
         """Open one transient named-context tab and import a renewable session."""
         try:
-            return self._acquire(
-                interactive=interactive,
-                expected_user_id=expected_user_id,
-                timeout_seconds=timeout_seconds,
-            )
+            # A caller's `timeout` must still close the tab (see autologin.terminable).
+            with autologin.terminable():
+                return self._acquire(
+                    interactive=interactive,
+                    expected_user_id=expected_user_id,
+                    timeout_seconds=timeout_seconds,
+                    assistant=assistant,
+                )
         except BrowserImportError:
             if interactive:
                 raise

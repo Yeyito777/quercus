@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
+from . import autologin
 from .browser_import import VimbrowserAuthenticator
 from .client import CanvasClient
 from .errors import SessionRejectedError, SessionRequiredError
@@ -32,6 +33,7 @@ def load_or_refresh_session(
     lock: Path | None = None,
     validator: Callable[[CanvasSession], tuple[CanvasClient, dict]] = validate_session,
     vimbrowser_authenticator: VimbrowserAuthenticator | None = None,
+    auto_login: Callable[..., CanvasSession] | None = None,
 ) -> tuple[CanvasSession, CanvasClient, dict]:
     target = path or session_path()
     lock_target = lock or lock_path()
@@ -54,10 +56,21 @@ def load_or_refresh_session(
                     "the imported Quercus session expired; run `quercus login --persistent`"
                 ) from None
         authenticator = vimbrowser_authenticator or VimbrowserAuthenticator()
-        renewed = authenticator.acquire(
-            interactive=False,
-            expected_user_id=int(session.user["id"]),
-        )
+        expected_user_id = int(session.user["id"])
+        try:
+            renewed = authenticator.acquire(interactive=False, expected_user_id=expected_user_id)
+        except SessionRequiredError as error:
+            # U of T wants weblogin + Duo again: try one unattended login in
+            # the same context (rate-limited, duo-capped), else raise as before.
+            renewed = (auto_login or autologin.attempt)(
+                lambda assistant: authenticator.acquire(
+                    interactive=True,
+                    expected_user_id=expected_user_id,
+                    timeout_seconds=autologin.LOGIN_TIMEOUT_SECONDS,
+                    assistant=assistant,
+                ),
+                error,
+            )
         client, profile = validator(renewed)
         atomic_write_json(target, asdict(renewed))
         return renewed, client, profile

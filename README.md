@@ -73,7 +73,11 @@ Recommended renewable mode:
 
 A transient tab opens in vimbrowser's persistent isolated `quercus-helper` context. Complete U of T sign-in and Duo normally. Once Canvas's current-user profile endpoint succeeds, the helper saves the relevant first-party cookie set, closes only the transient tab it opened, and restores the previously active tab where practical.
 
-Normal commands first use the saved cookies directly. If Canvas redirects that session to sign-in, the helper opens another transient tab in the same isolated context and attempts silent renewal through its existing browser state. It validates that renewal produced the same Canvas user ID and never selects among existing tabs or accounts. If Duo or another human check is required, it safely fails with exit code 3 and asks for another `login --persistent`.
+Normal commands first use the saved cookies directly. If Canvas redirects that session to sign-in, the helper opens another transient tab in the same isolated context and attempts silent renewal through its existing browser state. It validates that renewal produced the same Canvas user ID and never selects among existing tabs or accounts. If U of T weblogin and Duo are required, it first tries one automatic re-login (below); if that is unavailable or fails, it exits 3 and asks for another `login --persistent`.
+
+### Automatic re-login
+
+At most once per 30 minutes, `quercus` reopens the helper tab focused, fills `#username`/`#password` from the `UOFT_UTORID`/`UOFT_UTORID_PASSWORD` secrets via `secrets run`, reads the Verified Push code from that tab's Duo page (switching to the "Exocortex local" device if needed), and asks `duo own-login approve` to approve the one matching request. duo-cli enforces the login lock, a 6-per-day cap, request matching, and an audit log; see its SECURITY.md. Disable with `QUERCUS_AUTOLOGIN=0`.
 
 The context name defaults to `quercus-helper`. Set `QUERCUS_VIMBROWSER_CONTEXT` to another valid vimbrowser context name (1-48 lowercase letters, numbers, `_`, or `-`) before the first login if isolation under a different name is desired. Continue using the same setting for renewal.
 
