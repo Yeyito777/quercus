@@ -104,6 +104,8 @@ class VimbrowserAuthenticator:
                 capture_output=True,
                 timeout=min(max(timeout, 0.1), 30.0),
                 check=False,
+                # vimbrowser-cli omits cookie values unless asked; the import needs them.
+                env={**os.environ, "VIMBROWSER_CLI_COOKIE_VALUES": "1"},
             )
         except FileNotFoundError:
             raise BrowserImportError("vimbrowser-cli is not installed or discoverable") from None
