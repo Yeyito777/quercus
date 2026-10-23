@@ -89,6 +89,22 @@ def opened_helper(url=CANVAS_URL, *, loading=False):
 
 
 class BrowserImportTests(unittest.TestCase):
+    def test_successful_silent_renewal_never_requests_focus(self):
+        runner = Runner([
+            (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
+            (["open-context", "quercus-helper", CANVAS_URL], tabs(
+                {"id": 44, "url": "https://example.com/", "active": True},
+                opened_helper(),
+            )),
+            (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
+            (["close-tab", "55"], {}),
+        ])
+        auth = VimbrowserAuthenticator(runner=runner, profile_loader=lambda _: {"id": 42})
+        session = auth.acquire(interactive=False, expected_user_id=42)
+        self.assertEqual(session.renewal_mode, "vimbrowser")
+        self.assertEqual(runner.responses, [])
+        self.assertFalse(any(command[1] == "focus" for command, _ in runner.calls))
+
     def test_compact_open_response_fetches_exact_context_tab(self):
         runner = Runner([
             (["tabs", "--json"], tabs({"id": 44, "url": "https://example.com/", "active": True})),
@@ -147,7 +163,6 @@ class BrowserImportTests(unittest.TestCase):
             (["tabs", "--json"], tabs(opened_helper())),
             (["cookies", "55", CANVAS_URL], {"cookies": []}),
             (["close-tab", "55"], {}),
-            (["focus", "44"], {}),
         ])
         auth = VimbrowserAuthenticator(runner=runner, clock=clock, sleeper=clock.sleep)
 
@@ -171,7 +186,6 @@ class BrowserImportTests(unittest.TestCase):
             )),
             *polls,
             (["close-tab", "55"], {}),
-            (["focus", "44"], {}),
         ])
         auth = VimbrowserAuthenticator(runner=runner, clock=clock, sleeper=clock.sleep)
 
@@ -202,7 +216,6 @@ class BrowserImportTests(unittest.TestCase):
             )),
             (["cookies", "55", CANVAS_URL], {}),
             (["close-tab", "55"], {}),
-            (["focus", "44"], {}),
         ])
         previous = signal.getsignal(signal.SIGTERM)
         try:
@@ -307,7 +320,6 @@ class BrowserImportTests(unittest.TestCase):
             )),
             (["cookies", "55", CANVAS_URL], {"cookies": [COOKIE]}),
             (["close-tab", "55"], {}),
-            (["focus", "44"], {}),
         ])
         auth = VimbrowserAuthenticator(
             runner=runner,
